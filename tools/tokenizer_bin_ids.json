@@ -1,0 +1,16 @@
+{
+  "special": {
+    "zho_Hans": 256200,
+    "eng_Latn": 256047,
+    "jpn_Jpan": 256079,
+    "kor_Hang": 256098,
+    "rus_Cyrl": 256147,
+    "zho_Hant": 256201
+  },
+  "vocab_size": 256204,
+  "merge_count": 514098,
+  "unk": 3,
+  "eos": 2,
+  "bos": 0,
+  "pad": 1
+}

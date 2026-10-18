@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置。
+
+  ## 为什么需要这个文件
+
+  Android 9（API 28）起默认禁止明文 HTTP。而「网络API调用」这个开关**必须**能在
+  真机上被无人值守地验证 —— 验证手段是把手机的 127.0.0.1:8099 通过
+  `adb reverse tcp:8099 tcp:8099` 指到本机跑的一个 OpenAI 兼容 mock。
+  没有这条配置，任何 http:// 请求都会被 OkHttp 直接拒掉：
+
+      UnknownServiceException: CLEARTEXT communication to 127.0.0.1
+      not permitted by network security policy
+
+  症状很像「请求发出去了但服务端没收到」，实际一个字节都没出网卡。
+
+  ## 为什么只放 localhost
+
+  放行的是 `127.0.0.1` / `localhost` / `10.0.2.2`（模拟器里的宿主机）三个本机地址，
+  **其它域名一律仍然强制 HTTPS**。真实 API Key 会走公网，明文放行整个 App 等于
+  把 key 摆在局域网上；只在回环地址上开这个口子，攻击面最小。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
