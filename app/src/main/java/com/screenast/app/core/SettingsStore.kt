@@ -116,6 +116,7 @@ class SettingsStore(private val context: Context) {
         val visionTranslate = booleanPreferencesKey("vision_translate")
         val visionEraseMode = intPreferencesKey("vision_erase_mode")
         val visionInpaint = booleanPreferencesKey("vision_inpaint")
+        val visionTextColor = intPreferencesKey("vision_text_color")
         val visionOcrServer = booleanPreferencesKey("vision_ocr_server")
         val visionFloatList = booleanPreferencesKey("vision_float_list")
         val visionMinChars = intPreferencesKey("vision_min_chars")
@@ -193,6 +194,7 @@ class SettingsStore(private val context: Context) {
                 visionTranslate = p[Keys.visionTranslate] ?: Settings().visionTranslate,
                 visionEraseMode = p[Keys.visionEraseMode] ?: Settings().visionEraseMode,
                 visionInpaint = p[Keys.visionInpaint] ?: Settings().visionInpaint,
+                visionTextColor = p[Keys.visionTextColor] ?: Settings().visionTextColor,
                 visionOcrServer = p[Keys.visionOcrServer] ?: Settings().visionOcrServer,
                 visionFloatList = p[Keys.visionFloatList] ?: Settings().visionFloatList,
                 visionMinChars = p[Keys.visionMinChars] ?: Settings().visionMinChars,
@@ -275,6 +277,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.visionTranslate] = next.visionTranslate
             p[Keys.visionEraseMode] = next.visionEraseMode
             p[Keys.visionInpaint] = next.visionInpaint
+            p[Keys.visionTextColor] = next.visionTextColor
             p[Keys.visionOcrServer] = next.visionOcrServer
             p[Keys.visionFloatList] = next.visionFloatList
             p[Keys.visionMinChars] = next.visionMinChars

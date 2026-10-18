@@ -126,8 +126,14 @@ class LlamaTranslationProvider(
         // 目标语种决定了系统提示词。AUTO 不是合法目标，兜到中文。
         // 自定义语种（设置里手填的）优先：它绕过枚举，能翻任何语言。
         val target = if (request.target == Lang.AUTO) Lang.ZH else request.target
-        val system = if (request.targetLabel.isNotBlank()) {
-            LlamaPrompt.systemForLabel(request.targetLabel, request.sourceLabel)
+        // 目标语种没自定义、但源语种知道时也要走 label 版：把「原文语言：日语」
+        // 写进系统提示词，小模型不容易把日语原样抄回来。
+        val system = if (request.targetLabel.isNotBlank() || request.sourceLabel.isNotBlank()) {
+            // targetLabel 空的时候用枚举的标签兜住，否则提示词会变成「翻译成，只输出译文」。
+            LlamaPrompt.systemForLabel(
+                request.targetLabel.ifBlank { target.label },
+                request.sourceLabel,
+            )
         } else {
             LlamaPrompt.systemFor(target)
         }

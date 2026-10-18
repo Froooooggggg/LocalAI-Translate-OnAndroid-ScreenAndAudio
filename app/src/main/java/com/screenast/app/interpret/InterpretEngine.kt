@@ -520,7 +520,11 @@ class InterpretEngine(
                     // 自定义语种：用户在设置里手填的名字直接进提示词，
                     // 枚举翻不了的语言（泰语、越南语…）靠这一条才能用。
                     targetLabel = customTargetLang().trim(),
-                    sourceLabel = customSourceLang().trim(),
+                    // 用户没自定义语种时，把 ASR 判出来的源语言也带上：
+                    // 2B 模型拿到「原文语言：日语」比让它自己猜更不容易照抄原文。
+                    sourceLabel = customSourceLang().trim().ifBlank {
+                        if (job.source != Lang.AUTO && job.source != job.target) job.source.label else ""
+                    },
                     history = ctx,
                 ),
             ).collect { chunk ->
@@ -552,6 +556,15 @@ class InterpretEngine(
         // 收 chunk 数写进日志：CONFLATED 通道会在消费者慢时丢掉中间态，
         // 所以这个数字明显小于 token 数时，说明「逐 token 推进」没真正体现到界面上 ——
         // 那是首字延迟降不下来的原因，而这一点从界面上看不出来。
+        // 译文跟原文一模一样 = 模型照抄了（小模型遇到没见过的语种/提示词里不让翻时会这样）。
+        // 用户看到的就是「日语没被翻译」，所以这里必须留一条能 grep 的日志。
+        if (outText.isNotBlank() && outText.trim() == job.text.trim()) {
+            Log.w(
+                TAG,
+                "第 ${job.id} 句译文与原文相同（模型照抄）：source=${job.source.label} " +
+                    "target=${job.target.label} 原文=${job.text.take(30)}",
+            )
+        }
         Log.i(
             TAG,
             "第 ${job.id} 句翻译完成：chunks=$chunks 首字=${firstMs}ms " +

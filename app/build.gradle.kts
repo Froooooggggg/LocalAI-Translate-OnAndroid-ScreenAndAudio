@@ -32,8 +32,8 @@ android {
         applicationId = "com.screenast.app"
         minSdk = 29          // AudioPlaybackCapture 起始版本（Android 10）
         targetSdk = 36       // Android 16 / 澎湃 OS 3
-        versionCode = 5
-        versionName = "0.7.2-beta"
+        versionCode = 6
+        versionName = "0.7.3-beta"
         vectorDrawables { useSupportLibrary = true }
 
         // ⚠️ 只出 arm64-v8a。三条理由：

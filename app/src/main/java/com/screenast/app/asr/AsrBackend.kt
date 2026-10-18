@@ -90,13 +90,28 @@ interface AsrBackend : AutoCloseable {
  * SenseVoice**（它自带语种识别），Paraformer 这条路只承诺中英。
  */
 internal fun guessLangFromText(text: String): Lang {
+    var kana = 0
+    var hangul = 0
+    var han = 0
+    var latin = 0
     for (ch in text) {
-        if (ch.code in 0x4E00..0x9FFF) return Lang.ZH
-        // 日文假名 / 韩文谚文：虽然 Paraformer 不该产出，但真出现了就别误判成中文
-        if (ch.code in 0x3040..0x30FF) return Lang.JA
-        if (ch.code in 0xAC00..0xD7AF) return Lang.KO
+        when (ch.code) {
+            // 半角片假名 0xFF61..0xFF9F、片假名语音扩展 0x31F0..0x31FF 都算假名：
+            // 用户要求「只要有假名就一律翻译」，半角片假名漏掉会让整句落到「中文」。
+            in 0x3040..0x30FF, in 0x31F0..0x31FF, in 0xFF61..0xFF9F -> kana++
+            in 0xAC00..0xD7AF, in 0x1100..0x11FF, in 0x3130..0x318F -> hangul++
+            in 0x4E00..0x9FFF, in 0xF900..0xFAFF -> han++
+            else -> if (ch.isLetter()) latin++
+        }
     }
-    return if (text.any { it.isLetter() }) Lang.EN else Lang.AUTO
+    // ⚠️ 顺序很重要：**先看假名/谚文，再看汉字**。
+    // 旧实现是「碰到第一个汉字就返回中文」，于是「今日はいい天気ですね」这种
+    // 「以汉字开头、后面才是假名」的日语被判成中文 → 命中「源=目标就不翻译」
+    // → 整句日语原样吐出（用户 2026-10-18：「日语有时候还是不翻译」的根因）。
+    if (kana > 0) return Lang.JA
+    if (hangul > 0) return Lang.KO
+    if (han > 0) return Lang.ZH
+    return if (latin > 0) Lang.EN else Lang.AUTO
 }
 
 /**

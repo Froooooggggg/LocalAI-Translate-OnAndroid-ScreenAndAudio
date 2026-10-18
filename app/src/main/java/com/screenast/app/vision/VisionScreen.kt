@@ -551,6 +551,37 @@ fun VisionSettingsSection(
                 fontSize = 11.sp, color = Color(0xFF8A87A0),
             )
 
+            // 译文颜色：0 = 智能（按底色 R+G+B 加和切黑白），其余是用户自己挑的。
+            Text("译文颜色", fontSize = 13.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val textColors = listOf(
+                    "智能" to 0,
+                    "白" to 0xFFFFFFFF.toInt(),
+                    "黑" to 0xFF14121A.toInt(),
+                    "黄" to 0xFFFFD54A.toInt(),
+                )
+                textColors.forEach { (label, argb) ->
+                    Chip(label, settings.visionTextColor == argb) {
+                        onChange(settings.copy(visionTextColor = argb))
+                        log(
+                            "译文颜色 → " + if (argb == 0) {
+                                "智能（底亮黑字 / 底暗白字）"
+                            } else {
+                                label
+                            },
+                        )
+                    }
+                }
+            }
+            Text(
+                if (settings.visionTextColor == 0) {
+                    "智能：底色 R+G+B 加起来 > 382.5 用黑字，否则白字"
+                } else {
+                    "固定颜色（不随底色变化，浅底上可能看不清）"
+                },
+                fontSize = 11.sp, color = Color(0xFF8A87A0),
+            )
+
             if (settings.visionEraseMode == 2) {
                 // 模型不在就别给点：以前这里是常开，点了「开」也只会退回程序贴片，
                 // 用户以为补背景生效了，其实是纯色块。

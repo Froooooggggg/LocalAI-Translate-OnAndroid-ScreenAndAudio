@@ -308,6 +308,14 @@ data class Settings(
      */
     val visionInpaint: Boolean = true,
     /**
+     * 译文颜色。
+     *
+     * 0（默认）= 智能：取底色的 R+G+B 加和，**大于 382.5 用黑字、小于等于 382.5 用白字**
+     * （382.5 = 255×1.5，也就是「平均通道亮过一半」）。
+     * 其它值 = 用户自定义的 ARGB（0xFFFFFFFF.toInt() = 白、0xFF14121A.toInt() = 黑…）。
+     */
+    val visionTextColor: Int = 0,
+    /**
      * 识别引擎用哪套 PP-OCRv5 权重。
      *
      * false（默认）= mobile（21MB，一帧约 1s）；true = server（164MB，一帧 3~5s）。

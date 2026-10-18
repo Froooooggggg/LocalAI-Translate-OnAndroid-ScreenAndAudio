@@ -69,13 +69,20 @@ object VisionInpaint {
         for (ch in text) {
             when (ch.code) {
                 in 0x4E00..0x9FFF, in 0x3400..0x4DBF, in 0xF900..0xFAFF -> han++
-                in 0x3040..0x30FF -> kana++
-                in 0xAC00..0xD7AF, in 0x1100..0x11FF -> hangul++
+                // 假名要算全：平假名/片假名（0x3040..0x30FF）、片假名语音扩展
+                // （0x31F0..0x31FF）、**半角片假名**（0xFF61..0xFF9F，漫画/老字体里常见）。
+                // 只认 0x3040..0x30FF 会把「ﾊﾝｶｸ」这种半角片假名算成「其它字母」，
+                // 于是汉字占比容易被算过 75% 而被当中文丢掉（用户 m07661）。
+                in 0x3040..0x30FF, in 0x31F0..0x31FF, in 0xFF61..0xFF9F -> kana++
+                in 0xAC00..0xD7AF, in 0x1100..0x11FF, in 0x3130..0x318F -> hangul++
                 else -> if (ch.isLetterOrDigit()) other++
             }
         }
         // 有假名 / 谚文 = 日文或韩文，再多的汉字也是「日语里的汉字」，不能当中文丢掉。
-        if (han == 0 || kana > 0 || hangul > 0) return false
+        // 用户 m07661：「中文筛选 75% 那条规则不适用于内含假名的情况，只要有片假名或
+        // 平假名统一都翻译」—— 所以假名判定**先于** 75% 阈值，且不受它影响。
+        if (kana > 0 || hangul > 0) return false
+        if (han == 0) return false
         // 75% 阈值（用户明确要求）：han / (han + other) >= 0.75
         return han * 4 >= (han + other) * 3
     }
@@ -156,7 +163,12 @@ object VisionInpaint {
      * 用户 m03633 要求把 MI-GAN 做成可禁用，禁用后走这条路：成本几乎为零（几毫秒），
      * 纯色块在纯色/渐变背景上几乎无痕，只有照片背景会露馅 —— 显式取舍，不是降级 bug。
      */
-    fun renderFlat(ctx: Context?, src: Bitmap, lines: List<VisionSession.Line>): Bitmap {
+    fun renderFlat(
+        ctx: Context?,
+        src: Bitmap,
+        lines: List<VisionSession.Line>,
+        textColor: Int = 0,
+    ): Bitmap {
         val targets = lines.filter { needsReplace(it) }
         val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
         if (targets.isEmpty()) return out
@@ -174,7 +186,7 @@ object VisionInpaint {
                 fill,
             )
         }
-        drawTranslations(out, plans)
+        drawTranslations(out, plans, textColor)
         // 调试留档（与 MI-GAN 档同一份路径）：程序贴片也落一张，方便直接 pull 出来看
         // 换行/排版/底色到底长什么样，不用跟用户的点击抢时间。
         runCatching {
@@ -203,16 +215,20 @@ object VisionInpaint {
      * 一屏几十块也就几十毫秒；比同色块自然（不会在花纹/渐变背景上留一块死板的颜色），
      * 比 MI-GAN 快两个数量级。
      */
-    fun renderBlur(ctx: Context?, src: Bitmap, lines: List<VisionSession.Line>): Bitmap {
+    fun renderBlur(
+        ctx: Context?,
+        src: Bitmap,
+        lines: List<VisionSession.Line>,
+        textColor: Int = 0,
+    ): Bitmap {
         val targets = lines.filter { needsReplace(it) }
         val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
         if (targets.isEmpty()) return out
         val t0 = System.currentTimeMillis()
         val plans = buildPlans(targets, src.width, src.height)
         val canvas = Canvas(out)
-        val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
-        val scrim = Paint(Paint.ANTI_ALIAS_FLAG)
-        scrim.color = Color.argb(38, 0, 0, 0)
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+        val rad = 6f
         val pad = 6
         plans.forEach { plan ->
             val r = plan.rect
@@ -223,27 +239,23 @@ object VisionInpaint {
             val w = rr - l
             val h = bb - t
             if (w <= 2 || h <= 2) return@forEach
-            // 先按 1/8 缩小、再放大回原尺寸：缩小丢掉的是高频细节，放大就是模糊。
-            val sw = (w / 8).coerceAtLeast(1)
-            val sh = (h / 8).coerceAtLeast(1)
+            // 用户要的效果：**整块糊成同一种颜色** —— 先把这块压到 1×1，那一个像素就是
+            // 这块区域的加权平均色；再拿它当底色铺满整个框。不是「缩小再放大」那种，
+            // 那样还看得见原来的笔画轮廓，糊得不够彻底。
             val crop = Bitmap.createBitmap(src, l, t, w, h)
-            val tiny = Bitmap.createScaledBitmap(crop, sw, sh, true)
-            if (crop !== tiny && !crop.isRecycled) crop.recycle()
+            val one = Bitmap.createScaledBitmap(crop, 1, 1, true)
+            fill.color = one.getPixel(0, 0)
+            if (!one.isRecycled) one.recycle()
+            if (crop !== one && !crop.isRecycled) crop.recycle()
             val dst = RectF(
                 l.toFloat() - 1f,
                 t.toFloat() - 1f,
                 rr.toFloat() + 1f,
                 bb.toFloat() + 1f,
             )
-            canvas.save()
-            canvas.clipRect(dst)
-            canvas.drawBitmap(tiny, null, dst, bmpPaint)
-            // 压暗一丁点：浅色背景上白字才看得清（透明度很低，不改变整体观感）。
-            canvas.drawRect(dst, scrim)
-            canvas.restore()
-            if (!tiny.isRecycled) tiny.recycle()
+            canvas.drawRoundRect(dst, rad, rad, fill)
         }
-        drawTranslations(out, plans)
+        drawTranslations(out, plans, textColor)
         // 跟另外两档一样留一份调试帧（files/erase_last.png），方便 adb pull 看实际效果。
         runCatching {
             val dir = ctx?.getExternalFilesDir(null) ?: ctx?.filesDir
@@ -287,7 +299,12 @@ object VisionInpaint {
      *
      * @param lines 这一帧的识别结果；只有 `translation` 非空且非竖排的块会被擦除重写。
      */
-    fun render(ctx: Context, src: Bitmap, lines: List<VisionSession.Line>): Bitmap {
+    fun render(
+        ctx: Context,
+        src: Bitmap,
+        lines: List<VisionSession.Line>,
+        textColor: Int = 0,
+    ): Bitmap {
         // 只擦「需要替换」的块：中文原文、译文与原文相同的一律不碰。
         val targets = lines.filter { needsReplace(it) }
         val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
@@ -352,7 +369,7 @@ object VisionInpaint {
             }
             doneMs += System.currentTimeMillis() - t1
         }
-        drawTranslations(out, plans)
+        drawTranslations(out, plans, textColor)
         // 调试留档：整帧结果落一份 PNG（`files/erase_last.png`），方便 adb pull 出来看补背景质量，
         // 也免得为了截一张图跟用户的点击抢时间。每次覆盖，不占空间。
         runCatching {
@@ -481,13 +498,20 @@ object VisionInpaint {
         return out
     }
 
-    /** 把译文写进擦干净的框：底色亮则黑字，暗则白字；放不下会断成多行。竖排逐字往下摞。 */
-    private fun drawTranslations(dst: Bitmap, plans: List<Plan>) {
+    /**
+     * 把译文写进擦干净的框；放不下会断成多行，竖排逐字往下摞。
+     *
+     * 颜色规则（用户 m07554）：
+     * - `textColor != 0`：用户自定义色，直接照用。
+     * - `textColor == 0`：**智能** —— 取该框底色的 R+G+B 加和，
+     *   **大于 382.5 用黑字、小于等于 382.5 用白字**（382.5 = 255×1.5，
+     *   意思就是「平均通道亮过一半就换黑字」）。
+     */
+    private fun drawTranslations(dst: Bitmap, plans: List<Plan>, textColor: Int = 0) {
         val canvas = Canvas(dst)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.DEFAULT }
         plans.forEach { plan ->
-            val lum = meanLuminance(dst, plan.rect)
-            paint.color = if (lum > 140) Color.rgb(20, 18, 26) else Color.WHITE
+            paint.color = if (textColor != 0) textColor else smartTextColor(dst, plan.rect)
             paint.textSize = plan.size
             val save = canvas.save()
             canvas.clipRect(plan.rect)
@@ -526,6 +550,43 @@ object VisionInpaint {
     }
 
     /** 取框内平均亮度（每 4 像素采一次，够用且不慢）。 */
+    /**
+     * 智能文字色：底色 R+G+B 加和 > 382.5 → 黑字，否则白字。
+     * 阈值按用户给的 382.5（255 × 1.5），别改成「平均 128」那种近似。
+     */
+    private fun smartTextColor(bmp: Bitmap, box: Rect): Int {
+        val rgb = meanRgb(bmp, box)
+        val sum = Color.red(rgb) + Color.green(rgb) + Color.blue(rgb)
+        return if (sum > 382.5f) Color.rgb(20, 18, 26) else Color.WHITE
+    }
+
+    /** 区域平均色（每 4 像素采一点，够用且快）。 */
+    private fun meanRgb(bmp: Bitmap, box: Rect): Int {
+        val x0 = box.left.coerceIn(0, bmp.width - 1)
+        val x1 = box.right.coerceIn(x0 + 1, bmp.width)
+        val y0 = box.top.coerceIn(0, bmp.height - 1)
+        val y1 = box.bottom.coerceIn(y0 + 1, bmp.height)
+        var r = 0L
+        var g = 0L
+        var b = 0L
+        var n = 0L
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                val c = bmp.getPixel(x, y)
+                r += Color.red(c)
+                g += Color.green(c)
+                b += Color.blue(c)
+                n++
+                x += 4
+            }
+            y += 4
+        }
+        if (n == 0L) return Color.rgb(24, 22, 32)
+        return Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
+    }
+
     private fun meanLuminance(bmp: Bitmap, box: Rect): Int {
         val x0 = box.left.coerceIn(0, bmp.width - 1)
         val x1 = box.right.coerceIn(x0 + 1, bmp.width)

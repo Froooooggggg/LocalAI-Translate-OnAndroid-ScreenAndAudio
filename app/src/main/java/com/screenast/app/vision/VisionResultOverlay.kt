@@ -37,8 +37,18 @@ object VisionResultOverlay {
     private var params: WindowManager.LayoutParams? = null
     private val main = Handler(Looper.getMainLooper())
 
-    /** 屏幕上贴一层结果。空列表 = 直接撤掉旧层。 */
-    fun show(ctx: Context, lines: List<VisionSession.Line>, frameW: Int, frameH: Int) {
+    /**
+     * 屏幕上贴一层结果。空列表 = 直接撤掉旧层。
+     *
+     * @param textColor 0 = 跟随设置里的「智能/自定义」；这里传进来的就是最终颜色。
+     */
+    fun show(
+        ctx: Context,
+        lines: List<VisionSession.Line>,
+        frameW: Int,
+        frameH: Int,
+        textColor: Int = 0,
+    ) {
         main.post {
             val app = ctx.applicationContext
             hide()
@@ -52,7 +62,7 @@ object VisionResultOverlay {
                 return@post
             }
 
-            val v = PasteView(app, blocks, frameW, frameH)
+            val v = PasteView(app, blocks, frameW, frameH, textColor)
             // 永远可点：点一下屏幕（任何一个位置）就把译文收掉，这是用户唯一要求的下班方式。
             // 不做「本界面在前台就不拦触摸」——那样在自己页面里点屏幕收不掉，用户会以为卡死。
             v.setOnClickListener {
@@ -151,6 +161,7 @@ object VisionResultOverlay {
         private val blocks: List<VisionSession.Line>,
         private val frameW: Int,
         private val frameH: Int,
+        textColor: Int = 0,
     ) : View(ctx) {
 
         private val density = resources.displayMetrics.density
@@ -163,7 +174,9 @@ object VisionResultOverlay {
             color = Color.argb(110, 168, 140, 255)
         }
         private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            // 贴片底板固定是深色 #1C1A26，所以 0（未指定）就用白字；
+            // 用户在设置里挑了颜色就照他挑的来。
+            color = if (textColor != 0) textColor else Color.WHITE
             typeface = Typeface.DEFAULT
         }
 

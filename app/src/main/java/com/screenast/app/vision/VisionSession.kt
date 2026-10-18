@@ -268,7 +268,7 @@ object VisionSession {
                         // 模糊档：不加载模型，把原文那几块自己糊掉垫底再写译文。
                         // 用户：「之前在贴片翻译旁边不还有个模糊背景的嵌字方式，那个好用」。
                         val t0 = SystemClock.elapsedRealtime()
-                        val img = VisionInpaint.renderBlur(ctx, bitmap, snapshot)
+                        val img = VisionInpaint.renderBlur(ctx, bitmap, snapshot, st.visionTextColor)
                         Log.i(TAG, "模糊档整帧渲染完成 ${SystemClock.elapsedRealtime() - t0}ms")
                         val pasted = VisionInpaint.countTargets(snapshot)
                         VisionResultOverlay.showBitmap(ctx, img, w, h)
@@ -282,9 +282,9 @@ object VisionSession {
                         // 那样会在 native 层拿到空 session。退回程序贴片，并在状态行说明原因。
                         val canInpaint = st.visionInpaint && VisionInpaint.ensureLoaded(ctx)
                         val img = if (canInpaint) {
-                            VisionInpaint.render(ctx, bitmap, snapshot)
+                            VisionInpaint.render(ctx, bitmap, snapshot, st.visionTextColor)
                         } else {
-                            VisionInpaint.renderFlat(ctx, bitmap, snapshot)
+                            VisionInpaint.renderFlat(ctx, bitmap, snapshot, st.visionTextColor)
                         }
                         Log.i(TAG, "擦除档整帧渲染完成 ${SystemClock.elapsedRealtime() - t0}ms")
                         val pasted = VisionInpaint.countTargets(snapshot)
@@ -295,7 +295,7 @@ object VisionSession {
                         }
                         publish { status.value = buildStatus(w, h) + " · $how $pasted 块" }
                     } else {
-                        VisionResultOverlay.show(ctx, snapshot, w, h)
+                        VisionResultOverlay.show(ctx, snapshot, w, h, st.visionTextColor)
                         publish { status.value = buildStatus(w, h) + " · 贴片 ${paste.size} 块" }
                     }
                 }
