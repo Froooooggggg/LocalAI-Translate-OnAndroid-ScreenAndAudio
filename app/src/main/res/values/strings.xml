@@ -3,8 +3,8 @@
     <!-- 软件名（v0.5.0 起由「屏幕同传」改名）。桌面图标、最近任务、系统设置里的应用名都走这个。 -->
     <string name="app_name">同传互译</string>
     <!-- 界面上displayed的版本号。gradle 的 versionName 是 0.5.0-alpha；
-         这里用「0.7.1 Beta」是因为连字符在界面小字号下看着像减号。 -->
-    <string name="app_version">0.7.1 Beta</string>
+         这里用「0.7.2 Beta」是因为连字符在界面小字号下看着像减号。 -->
+    <string name="app_version">0.7.2 Beta</string>
     <string name="notification_channel_name">音频采集</string>
     <string name="notification_channel_desc">采集屏幕播放的音频时显示</string>
     <string name="accessibility_service_description">用于显示翻译悬浮窗；当无法采集到音频时，可读取屏幕字幕文字作为兜底翻译来源。</string>

@@ -529,9 +529,20 @@ fun VisionSettingsSection(
             Text("贴回方式", fontSize = 13.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Settings.VISION_ERASE_MODES.forEach { (mode, _) ->
-                    Chip(if (mode == 0) "贴片" else "擦除", settings.visionEraseMode == mode) {
+                    val label = when (mode) {
+                        0 -> "贴片"
+                        1 -> "模糊"
+                        else -> "擦除"
+                    }
+                    Chip(label, settings.visionEraseMode == mode) {
                         onChange(settings.copy(visionEraseMode = mode))
-                        log("贴回 → " + if (mode == 0) "贴片" else "擦除（MI-GAN，后续）")
+                        log(
+                            "贴回 → " + when (mode) {
+                                0 -> "贴片（同色块）"
+                                1 -> "模糊（原文区域糊掉垫底）"
+                                else -> "擦除（MI-GAN 补背景）"
+                            },
+                        )
                     }
                 }
             }

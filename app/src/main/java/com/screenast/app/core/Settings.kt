@@ -296,6 +296,7 @@ data class Settings(
      * 贴回方式。见 [VISION_ERASE_MODES]。
      *
      * 0 = 同色贴片（默认）：用框底色盖住原文再写译文，不加载任何模型。
+     * 1 = 模糊贴片：把那块区域自己糊掉垫底再写译文，不加载模型、比纯色块自然。
      * 2 = MI-GAN 擦除：先补背景再写字，约 20~50MB，属后续阶段。
      */
     val visionEraseMode: Int = 0,
@@ -343,6 +344,7 @@ data class Settings(
          */
         val VISION_ERASE_MODES = listOf(
             0 to "贴片（同色块盖住原文，不加载模型）",
+            1 to "模糊（把原文字那块自己糊掉垫底，不加载模型）",
             2 to "擦除（MI-GAN 补背景，约 20~50MB，后续）",
         )
 

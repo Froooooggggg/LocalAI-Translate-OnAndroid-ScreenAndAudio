@@ -264,6 +264,15 @@ object VisionSession {
                     if (paste.isEmpty()) {
                         Log.i(TAG, "没有译文可贴（翻译关着或后端不可用）")
                         publish { status.value = buildStatus(w, h) + " · 贴回 0 块（无译文）" }
+                    } else if (st.visionEraseMode == 1) {
+                        // 模糊档：不加载模型，把原文那几块自己糊掉垫底再写译文。
+                        // 用户：「之前在贴片翻译旁边不还有个模糊背景的嵌字方式，那个好用」。
+                        val t0 = SystemClock.elapsedRealtime()
+                        val img = VisionInpaint.renderBlur(ctx, bitmap, snapshot)
+                        Log.i(TAG, "模糊档整帧渲染完成 ${SystemClock.elapsedRealtime() - t0}ms")
+                        val pasted = VisionInpaint.countTargets(snapshot)
+                        VisionResultOverlay.showBitmap(ctx, img, w, h)
+                        publish { status.value = buildStatus(w, h) + " · 模糊贴回 $pasted 块" }
                     } else if (st.visionEraseMode == 2) {
                         // 擦除档：补背景 → 写译文 → 整帧贴回。
                         // 补背景用 MI-GAN；用户把「补背景」关掉时走程序贴片（框四周平均色），

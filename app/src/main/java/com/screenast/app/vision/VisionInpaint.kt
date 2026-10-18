@@ -196,6 +196,70 @@ object VisionInpaint {
         return out
     }
 
+    /**
+     * **模糊贴片**：把原文那几块自己糊掉垫在底下，再写译文。
+     *
+     * 不加载任何模型，成本只有「降采样 + 放大」（`FILTER_BITMAP_FLAG` 的近似 box blur），
+     * 一屏几十块也就几十毫秒；比同色块自然（不会在花纹/渐变背景上留一块死板的颜色），
+     * 比 MI-GAN 快两个数量级。
+     */
+    fun renderBlur(ctx: Context?, src: Bitmap, lines: List<VisionSession.Line>): Bitmap {
+        val targets = lines.filter { needsReplace(it) }
+        val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
+        if (targets.isEmpty()) return out
+        val t0 = System.currentTimeMillis()
+        val plans = buildPlans(targets, src.width, src.height)
+        val canvas = Canvas(out)
+        val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+        val scrim = Paint(Paint.ANTI_ALIAS_FLAG)
+        scrim.color = Color.argb(38, 0, 0, 0)
+        val pad = 6
+        plans.forEach { plan ->
+            val r = plan.rect
+            val l = (r.left.toInt() - pad).coerceAtLeast(0)
+            val t = (r.top.toInt() - pad).coerceAtLeast(0)
+            val rr = (r.right.toInt() + pad).coerceAtMost(src.width)
+            val bb = (r.bottom.toInt() + pad).coerceAtMost(src.height)
+            val w = rr - l
+            val h = bb - t
+            if (w <= 2 || h <= 2) return@forEach
+            // 先按 1/8 缩小、再放大回原尺寸：缩小丢掉的是高频细节，放大就是模糊。
+            val sw = (w / 8).coerceAtLeast(1)
+            val sh = (h / 8).coerceAtLeast(1)
+            val crop = Bitmap.createBitmap(src, l, t, w, h)
+            val tiny = Bitmap.createScaledBitmap(crop, sw, sh, true)
+            if (crop !== tiny && !crop.isRecycled) crop.recycle()
+            val dst = RectF(
+                l.toFloat() - 1f,
+                t.toFloat() - 1f,
+                rr.toFloat() + 1f,
+                bb.toFloat() + 1f,
+            )
+            canvas.save()
+            canvas.clipRect(dst)
+            canvas.drawBitmap(tiny, null, dst, bmpPaint)
+            // 压暗一丁点：浅色背景上白字才看得清（透明度很低，不改变整体观感）。
+            canvas.drawRect(dst, scrim)
+            canvas.restore()
+            if (!tiny.isRecycled) tiny.recycle()
+        }
+        drawTranslations(out, plans)
+        // 跟另外两档一样留一份调试帧（files/erase_last.png），方便 adb pull 看实际效果。
+        runCatching {
+            val dir = ctx?.getExternalFilesDir(null) ?: ctx?.filesDir
+            if (dir != null) {
+                java.io.FileOutputStream(java.io.File(dir, "erase_last.png")).use {
+                    out.compress(Bitmap.CompressFormat.PNG, 100, it)
+                }
+            }
+        }.onFailure { Log.w(TAG, "写调试帧失败：${it.message}") }
+        plans.take(3).forEachIndexed { i, p ->
+            Log.i(TAG, "blur[$i] box=${p.rect} size=${p.size} rows=${p.rows.size}")
+        }
+        Log.i(TAG, "模糊贴片：${plans.size} 块，${System.currentTimeMillis() - t0}ms")
+        return out
+    }
+
     /** 取框外一圈（上下各一条 3px 带）的平均色，避免采到框内原文的笔画。 */
     private fun ringColor(bmp: Bitmap, box: Rect): Int {
         val band = 3
