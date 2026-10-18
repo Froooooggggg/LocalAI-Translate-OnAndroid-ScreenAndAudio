@@ -6,6 +6,7 @@ import android.util.Log
 import com.screenast.app.asr.AsrBackend
 import com.screenast.app.asr.DictationEngine
 import com.screenast.app.asr.DictationHub
+import com.screenast.app.asr.guessLangFromText
 import com.screenast.app.core.Lang
 import com.screenast.app.translate.HistoryTurn
 import com.screenast.app.translate.TranslateChunk
@@ -418,18 +419,29 @@ class InterpretEngine(
             callback.onNotice("没有设置目标语言，这一句只显示原文")
             return
         }
-        val source = if (lang != Lang.AUTO) lang else fallbackSource()
+        var source = if (lang != Lang.AUTO) lang else fallbackSource()
         if (source == Lang.AUTO) {
             skippedNoLang++
             callback.onNotice("第 $id 句语种没判定出来，跳过翻译（可在界面上指定源语言）")
             return
         }
         if (source == target) {
-            // 已经在说目标语言了 —— 原文就是「译文」，直接定稿。
-            // 这不是优化：把它送去 NLLB 会得到一句被模型改写过的话，反而更差。
-            skippedNoLang++
-            callback.onTranslation(id, text, isFinal = true, firstChunkMs = 0L, totalMs = 0L)
-            return
+            // ASR 偶尔会把日语/韩语判成中文（音乐、噪声、汉字多的短句最容易），
+            // 这时「源=目标就跳过」会把整句日语当成品直接显示、根本不翻。
+            // 用文字本身再校一次：判到别的语言就照翻，别信 ASR 的这一次。
+            val byText = guessLangFromText(text)
+            if (byText != Lang.AUTO && byText != target) {
+                Log.i(TAG, "第 $id 句：ASR 判 ${source.label}、文本看着像 ${byText.label}，仍送去翻译")
+                callback.onNotice("第 $id 句 ASR 判成${source.label}，但看着像${byText.label}，照翻")
+                source = byText
+            } else {
+                // 已经在说目标语言了 —— 原文就是「译文」，直接定稿。
+                // 这不是优化：把它送去 NLLB 会得到一句被模型改写过的话，反而更差。
+                Log.i(TAG, "第 $id 句：源=目标（${source.label}），原文直接定稿")
+                skippedNoLang++
+                callback.onTranslation(id, text, isFinal = true, firstChunkMs = 0L, totalMs = 0L)
+                return
+            }
         }
 
         enqueued++
