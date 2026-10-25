@@ -990,6 +990,11 @@ class InterpretActivity : ComponentActivity() {
             "今日はいい天気ですね。",
             "明日の会議は午後三時からです。",
             "おい、そこの君。ちょっと来てくれないか。",
+            // 真机日志里中文提示词失败的片假名游戏术语 / ASR 错词样例
+            "ダメージを軽減することができます。そのため、回避率の高いタンクを編成することをお勧めします。",
+            "味方のコスト回復力が上昇します。はい、というわけでね。",
+            "各グループの正面にいる敵は、正面のグループ以外の敵を攻撃する。",
+            "伤害を軽減できます。そのため、回避率も。",
         )
         cases.forEachIndexed { i, src ->
             val sb = StringBuilder()
@@ -1003,10 +1008,19 @@ class InterpretActivity : ComponentActivity() {
                     it.code in 0x3040..0x30FF || it.code in 0x31F0..0x31FF ||
                         it.code in 0xFF61..0xFF9F
                 }
-                val tag = if (kana) "FAIL_JA" else "OK_ZH"
+                val tag = when {
+                    out.isEmpty() -> "EMPTY"
+                    kana -> "FAIL_JA"
+                    else -> "OK_ZH"
+                }
+                val human = when {
+                    out.isEmpty() -> "⚠ 未翻译（空）"
+                    kana -> "❌仍是日文"
+                    else -> "✅中文"
+                }
                 val ms = android.os.SystemClock.elapsedRealtime() - t0
                 android.util.Log.i(TAG, "llamatest[$i] $tag ${ms}ms src=$src out=$out")
-                append("llamatest[$i] ${if (kana) "❌仍是日文" else "✅中文"} ${ms}ms：$out")
+                append("llamatest[$i] $human ${ms}ms：$out")
             }.onFailure {
                 android.util.Log.e(TAG, "llamatest[$i] ERROR", it)
                 append("llamatest[$i] ❌ ${it.javaClass.simpleName}: ${it.message}")

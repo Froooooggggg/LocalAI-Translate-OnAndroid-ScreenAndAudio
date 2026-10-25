@@ -106,6 +106,32 @@ object LlamaPrompt {
     }
 
     /**
+     * 日文的**英文兜底**提示词。
+     *
+     * 2026-10-25 真机日志里出现一批中文提示词治不了的句子：片假名游戏术语密集、
+     * ASR 还把专名听错（`ナイトメアトレント` / `アクムコア` / `駅ベンドローン`）。
+     * 中文提示词（含严格版）会原样回日文或中英日混杂；同一条输入换英文提示词
+     * 能稳定译成中文。所以中文两次都失败后，再换英文提示词兜一次。
+     *
+     * 只用于日文源；英文/韩文源不走这里，避免改变已回归过的 15 条英文 / 4 条韩文。
+     */
+    fun systemForJapaneseEnglish(targetEnglishName: String): String =
+        "Translate the following Japanese text into ${targetEnglishName.trim()}." +
+            " Output only the translation."
+
+    /**
+     * 术语密集内容的兜底（游戏/技术说明）。
+     *
+     * 2026-10-25 真机日志里 `味方のコスト回復力が上昇します。` 这类片假名术语句，
+     * 中文 / 严格中文 / 英文三种提示词都可能原样回日文；加上「片假名按语境意译、
+     * 不要保留日文」后能翻成中文。只作为日文的最后一级兜底，不影响普通句子。
+     */
+    fun systemForJapaneseGame(targetEnglishName: String): String =
+        "Translate the following Japanese text into ${targetEnglishName.trim()}." +
+            " Some words are katakana game or technical terms; translate them by meaning," +
+            " do not keep Japanese. Output only the translation."
+
+    /**
      * 单轮翻译提示词：system 轮 + user 轮 + 已开好的 assistant 轮（含闭合空 think 块）。
      *
      * ⚠️ 换行、空行数量都是逐字节对齐模板渲染结果的，**不要格式化重排**。

@@ -430,6 +430,10 @@ class InterpretEngine(
             // ASR 偶尔会把日语/韩语判成中文（音乐、噪声、汉字多的短句最容易），
             // 这时「源=目标就跳过」会把整句日语当成品直接显示、根本不翻。
             // 用文字本身再校一次：判到别的语言就照翻，别信 ASR 的这一次。
+            //
+            // ⚠️ 这里**没有**识图那条「汉字 ≥75% 当中文」的规则；那条只在
+            // `VisionInpaint.isChinese()` / `VisionSession` 里。同传的判据是
+            // `guessLangFromText()`：有假名就是日语，只有纯汉字才可能落回中文。
             val byText = guessLangFromText(text)
             if (byText != Lang.AUTO && byText != target) {
                 Log.i(TAG, "第 $id 句：ASR 判 ${source.label}、文本看着像 ${byText.label}，仍送去翻译")

@@ -149,17 +149,36 @@ class LlamaTranslationProvider(
             else -> LlamaPrompt.systemFor(target)
         }
         val strictSystem = if (isJapanese) LlamaPrompt.systemForJapaneseStrict(targetLabel) else system
+        // 中文提示词两次都失败时的英文兜底。实测：片假名游戏术语 / ASR 听错专名的句子，
+        // 中文提示词会原样回日文或中英日混杂，英文提示词能稳定译成中文。
+        val englishSystem = if (isJapanese) {
+            LlamaPrompt.systemForJapaneseEnglish(englishTargetName(target, request.targetLabel))
+        } else {
+            system
+        }
+        // 术语密集内容的最后一级整句兜底（片假名游戏/技术词）。
+        val gameSystem = if (isJapanese) {
+            LlamaPrompt.systemForJapaneseGame(englishTargetName(target, request.targetLabel))
+        } else {
+            system
+        }
 
         /**
-         * 跑一次生成。抽成局部函数是为了「日文第一次仍输出日文」时能用严格提示词重试一次。
-         * 流式 chunk 仍按原样发；重试的 chunk 会覆盖 UI 上的坏结果（TranslateChunk.text 是覆盖语义）。
+         * 跑一次生成。抽成局部函数是为了失败链：中文 → 严格中文 → 英文 → 拆句英文。
+         * [emitChunks] 为 false 时不往 UI 推中间态（拆句时只在最后发一次合并结果）。
          */
-        suspend fun runOnce(sys: String): String {
+        suspend fun runOnce(
+            sys: String,
+            source: String = text,
+            useHistory: Boolean = true,
+            emitChunks: Boolean = true,
+        ): String {
             // 有上文就走多轮提示词；没有就走定稿的单轮形态（字节级不变，别动）。
-            val prompt = if (request.history.isEmpty()) {
-                LlamaPrompt.translate(text, sys)
+            // 兜底链里的英文/拆句重试不带上下文：上文里可能已经混进坏译文，隔离掉更稳。
+            val prompt = if (useHistory && request.history.isNotEmpty()) {
+                LlamaPrompt.translateWithHistory(source, sys, request.history)
             } else {
-                LlamaPrompt.translateWithHistory(text, sys, request.history)
+                LlamaPrompt.translate(source, sys)
             }
             val raw = StringBuilder()
             withContext(Dispatchers.Default) {
@@ -172,32 +191,67 @@ class LlamaTranslationProvider(
                 // 不是靠 KV 残留，两者不能混用（混用就是 §0.5 那次随机吐垃圾的形态）。
                 LlamaRuntime.memoryClear()
 
-                if (request.history.isNotEmpty()) {
+                if (useHistory && request.history.isNotEmpty()) {
                     // 打印轮数与提示词长度：上下文一变长，首字延迟上升是否来自 prefill，
                     // 只能靠这两个数字判断（别只看「感觉变慢了」）。
                     android.util.Log.i(
                         TAG,
-                        "带上文 ${request.history.size} 轮，提示词 ${prompt.length} 字符 / 本句 ${text.length} 字符",
+                        "带上文 ${request.history.size} 轮，提示词 ${prompt.length} 字符 / 本句 ${source.length} 字符",
                     )
                 }
 
                 LlamaRuntime.generate(prompt, maxNew = maxNewTokens) { piece ->
                     raw.append(piece)
-                    // 流式净化：每来一片就重新净化**整个**缓冲区。
-                    // 触发截断后文本只会变短，而 TranslateChunk.text 本来就是覆盖语义，
-                    // 所以「已经显示了一段、后来又收回」是允许的（也正是我们要的行为）。
-                    val cleaned = LlamaOutput.clean(raw.toString())
-                    if (cleaned.text.isNotEmpty()) {
-                        trySend(TranslateChunk(cleaned.text, isFinal = false))
+                    if (emitChunks) {
+                        // 流式净化：每来一片就重新净化**整个**缓冲区。
+                        // 触发截断后文本只会变短，而 TranslateChunk.text 本来就是覆盖语义，
+                        // 所以「已经显示了一段、后来又收回」是允许的（也正是我们要的行为）。
+                        val cleaned = LlamaOutput.clean(raw.toString())
+                        if (cleaned.text.isNotEmpty()) {
+                            trySend(TranslateChunk(cleaned.text, isFinal = false))
+                        }
                     }
                 }
             }
             return raw.toString()
         }
 
+        /**
+         * 最后一道兜底：按句/读点拆开，用英文提示词逐段翻。
+         * 只保留真正翻成目标语的段；一段都没有就返回空串（让 UI 显示未翻译）。
+         */
+        suspend fun translateClauses(): LlamaOutput.Cleaned {
+            val parts = splitJapanese(text)
+            if (parts.size <= 1) return LlamaOutput.Cleaned("")
+            val translated = ArrayList<String>(parts.size)
+            for (part in parts) {
+                var picked = ""
+                // 每段依次试：中文专用 → 英文 → 术语兜底 → 严格中文。
+                // 任何一段都失败就**整句放弃**（返回空串），不拼半句——
+                // 半句中文比「未翻译」更误导（实测 `味方のコスト…` 只翻出后半句）。
+                for (sys in listOf(system, englishSystem, gameSystem, strictSystem)) {
+                    val c = LlamaOutput.clean(
+                        runOnce(
+                            sys,
+                            source = part,
+                            useHistory = false,
+                            emitChunks = false,
+                        ),
+                    )
+                    if (!TranslationQuality.looksUntranslated(Lang.JA, target, part, c.text)) {
+                        picked = c.text
+                        break
+                    }
+                }
+                if (picked.isBlank()) return LlamaOutput.Cleaned("")
+                translated += picked
+            }
+            return LlamaOutput.Cleaned(joinClauseTranslations(translated, target))
+        }
+
         try {
             var final = LlamaOutput.clean(runOnce(system))
-            // 日文专用提示词已经把已知失败压到 0/12；这里只兜「模型偶尔还是改写日文」。
+            // 日文专用提示词已经把普通日语压到 0/12；这里兜模型偶尔的日文改写。
             // 非日文不重试：英文 15 条 / 韩文 4 条已经验证过，不要额外改变行为。
             if (isJapanese && TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
                 android.util.Log.w(
@@ -207,7 +261,24 @@ class LlamaTranslationProvider(
                 val retry = LlamaOutput.clean(runOnce(strictSystem))
                 if (retry.text.isNotBlank()) final = retry
                 if (TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
-                    android.util.Log.w(TAG, "重试后仍像日文：${final.text.take(40)}")
+                    android.util.Log.w(TAG, "严格中文仍失败，换英文提示词：${final.text.take(40)}")
+                    val english = LlamaOutput.clean(runOnce(englishSystem, useHistory = false))
+                    if (english.text.isNotBlank()) final = english
+                    if (TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
+                        android.util.Log.w(TAG, "英文提示词仍失败，换术语兜底：${final.text.take(40)}")
+                        val game = LlamaOutput.clean(runOnce(gameSystem, useHistory = false))
+                        if (game.text.isNotBlank()) final = game
+                    }
+                    if (TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
+                        android.util.Log.w(TAG, "术语兜底仍失败，尝试按句拆开：${final.text.take(40)}")
+                        final = translateClauses()
+                        if (TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
+                            // 不再把日文当译文显示：返回空串，UI 显示「（未翻译）」，
+                            // 原文仍在上面；同时 InterpretEngine 不会把它写进上文。
+                            android.util.Log.w(TAG, "所有兜底均失败，返回空译文（UI 显示未翻译）")
+                            final = LlamaOutput.Cleaned("")
+                        }
+                    }
                 }
             }
             if (final.truncated) {
@@ -222,6 +293,93 @@ class LlamaTranslationProvider(
             throw TranslationException("端侧大模型翻译失败：${t.message ?: t.javaClass.simpleName}", t)
         }
     }.buffer(Channel.CONFLATED)
+
+    /**
+     * 英文兜底提示词里的目标语名。中文目标必须写 `Simplified Chinese`——
+     * 只写 `Chinese` 时 2B 偶尔会输出繁体。
+     */
+    private fun englishTargetName(target: Lang, customLabel: String): String {
+        val label = customLabel.trim()
+        if (label.isNotEmpty()) {
+            return when {
+                label.contains("繁") -> "Traditional Chinese"
+                label.contains("简") || label.contains("中") -> "Simplified Chinese"
+                label.contains("英") -> "English"
+                label.contains("日") -> "Japanese"
+                label.contains("韩") || label.contains("韓") -> "Korean"
+                label.contains("泰") -> "Thai"
+                label.contains("越") -> "Vietnamese"
+                else -> label
+            }
+        }
+        return when (target) {
+            Lang.ZH -> "Simplified Chinese"
+            Lang.EN -> "English"
+            Lang.JA -> "Japanese"
+            Lang.KO -> "Korean"
+            else -> "Simplified Chinese"
+        }
+    }
+
+    /**
+     * 日文兜底拆句：先按句末标点，长句再按读点拆。
+     *
+     * 只用于「中文/英文整句都失败」的最后一道兜底；拆得过多会让译文碎，
+     * 所以单句 ≤28 字不拆，最多 8 段。
+     */
+    private fun splitJapanese(text: String): List<String> {
+        if (text.length <= 24) return listOf(text)
+        val sentences = ArrayList<String>()
+        val sb = StringBuilder()
+        for (ch in text) {
+            sb.append(ch)
+            if (ch in "。！？!?") {
+                val s = sb.toString().trim()
+                if (s.isNotEmpty()) sentences += s
+                sb.clear()
+            }
+        }
+        val tail = sb.toString().trim()
+        if (tail.isNotEmpty()) sentences += tail
+
+        val out = ArrayList<String>()
+        for (s in sentences) {
+            if (s.length <= 28) {
+                out += s
+                continue
+            }
+            val pieces = s.split('、', '，').map { it.trim() }.filter { it.isNotEmpty() }
+            if (pieces.size <= 1) {
+                out += s
+            } else {
+                pieces.forEach { p ->
+                    out += if (p.last() in "。！？!?") p else "$p。"
+                }
+            }
+        }
+        return out.filter { it.length >= 2 }.take(8)
+    }
+
+    /** 拼拆句译文；中文直接连，英文/其它加空格，缺标点时补一个句号。 */
+    private fun joinClauseTranslations(parts: List<String>, target: Lang): String {
+        val sb = StringBuilder()
+        for (raw in parts) {
+            val s = raw.trim()
+            if (s.isEmpty()) continue
+            if (sb.isNotEmpty()) {
+                if (target == Lang.ZH || target == Lang.JA) {
+                    if (!isSentenceEnd(sb.last()) && !isSentenceEnd(s.first())) sb.append('。')
+                } else {
+                    sb.append(' ')
+                }
+            }
+            sb.append(s)
+        }
+        return sb.toString()
+    }
+
+    private fun isSentenceEnd(c: Char): Boolean =
+        c in "。！？!?；;，,、"
 
     /**
      * 自检**只看模型文件在不在，不真跑一次翻译**（同 [com.screenast.app.translate.nllb.NllbTranslationProvider]）。
