@@ -7,7 +7,7 @@
 
 全程本地推理：录音、截屏、译文都不出设备。唯一的例外是你在设置里**显式**把翻译后端切成「网络 API 调用」并填了在线服务地址。
 
-> 版本 `0.7.3-beta`；个人项目，仍在迭代。`minSdk 29`（Android 10）、`targetSdk 36`、只出 `arm64-v8a`。
+> 版本 `0.7.4-beta`；个人项目，仍在迭代。`minSdk 29`（Android 10）、`targetSdk 36`、只出 `arm64-v8a`。
 
 > 仓库名：`LocalAI-Translate-Android-Screen-And-Audio`（旧名 `...OnAndriod...` 是拼写笔误）。
 

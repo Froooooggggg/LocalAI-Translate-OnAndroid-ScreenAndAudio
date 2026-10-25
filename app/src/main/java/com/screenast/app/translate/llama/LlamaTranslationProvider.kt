@@ -8,6 +8,7 @@ import com.screenast.app.translate.TranslateChunk
 import com.screenast.app.translate.TranslateRequest
 import com.screenast.app.translate.TranslationException
 import com.screenast.app.translate.TranslationProvider
+import com.screenast.app.translate.TranslationQuality
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -126,27 +127,41 @@ class LlamaTranslationProvider(
         // 目标语种决定了系统提示词。AUTO 不是合法目标，兜到中文。
         // 自定义语种（设置里手填的）优先：它绕过枚举，能翻任何语言。
         val target = if (request.target == Lang.AUTO) Lang.ZH else request.target
-        // 目标语种没自定义、但源语种知道时也要走 label 版：把「原文语言：日语」
-        // 写进系统提示词，小模型不容易把日语原样抄回来。
-        val system = if (request.targetLabel.isNotBlank() || request.sourceLabel.isNotBlank()) {
-            // targetLabel 空的时候用枚举的标签兜住，否则提示词会变成「翻译成，只输出译文」。
-            LlamaPrompt.systemForLabel(
-                request.targetLabel.ifBlank { target.label },
-                request.sourceLabel,
-            )
-        } else {
-            LlamaPrompt.systemFor(target)
+        // 识图侧只传了 request.source（按块猜的语种），没传 sourceLabel；
+        // 这里补一次兜底，否则日文会落到通用的「把下面的内容翻译成…」上。
+        val derivedSourceLabel = request.sourceLabel.trim().ifBlank {
+            if (request.source != Lang.AUTO && request.source != target) request.source.label else ""
         }
-        // 有上文就走多轮提示词；没有就走定稿的单轮形态（字节级不变，别动）。
-        val prompt = if (request.history.isEmpty()) {
-            LlamaPrompt.translate(text, system)
-        } else {
-            LlamaPrompt.translateWithHistory(text, system, request.history)
+        // 日文源必须走专用提示词：当前通用提示词会把对话型日语改写成日文。
+        val isJapanese = request.source == Lang.JA || derivedSourceLabel.contains("日")
+        // 日文分支统一用「简体中文」；其它语种保持原来的 target.label（中文/英文/韩文），
+        // 避免改变已经验证过的英文 15 条 / 韩文 4 条提示词。
+        val targetLabel = request.targetLabel.trim().ifBlank {
+            if (target == Lang.ZH) "简体中文" else target.label
         }
+        val system = when {
+            isJapanese -> LlamaPrompt.systemForJapanese(targetLabel)
+            request.targetLabel.isNotBlank() || request.sourceLabel.isNotBlank() ->
+                LlamaPrompt.systemForLabel(
+                    request.targetLabel.ifBlank { target.label },
+                    request.sourceLabel,
+                )
+            else -> LlamaPrompt.systemFor(target)
+        }
+        val strictSystem = if (isJapanese) LlamaPrompt.systemForJapaneseStrict(targetLabel) else system
 
-        val raw = StringBuilder()
-
-        try {
+        /**
+         * 跑一次生成。抽成局部函数是为了「日文第一次仍输出日文」时能用严格提示词重试一次。
+         * 流式 chunk 仍按原样发；重试的 chunk 会覆盖 UI 上的坏结果（TranslateChunk.text 是覆盖语义）。
+         */
+        suspend fun runOnce(sys: String): String {
+            // 有上文就走多轮提示词；没有就走定稿的单轮形态（字节级不变，别动）。
+            val prompt = if (request.history.isEmpty()) {
+                LlamaPrompt.translate(text, sys)
+            } else {
+                LlamaPrompt.translateWithHistory(text, sys, request.history)
+            }
+            val raw = StringBuilder()
             withContext(Dispatchers.Default) {
                 ensureLoaded()
 
@@ -177,19 +192,35 @@ class LlamaTranslationProvider(
                     }
                 }
             }
+            return raw.toString()
+        }
+
+        try {
+            var final = LlamaOutput.clean(runOnce(system))
+            // 日文专用提示词已经把已知失败压到 0/12；这里只兜「模型偶尔还是改写日文」。
+            // 非日文不重试：英文 15 条 / 韩文 4 条已经验证过，不要额外改变行为。
+            if (isJapanese && TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
+                android.util.Log.w(
+                    TAG,
+                    "首次输出仍像日文，换严格提示词重试一次：${final.text.take(40)}",
+                )
+                val retry = LlamaOutput.clean(runOnce(strictSystem))
+                if (retry.text.isNotBlank()) final = retry
+                if (TranslationQuality.looksUntranslated(request.source, target, text, final.text)) {
+                    android.util.Log.w(TAG, "重试后仍像日文：${final.text.take(40)}")
+                }
+            }
+            if (final.truncated) {
+                android.util.Log.i(
+                    TAG,
+                    "输出已净化（${final.reason}）：${final.text.length} 字符",
+                )
+            }
+            send(TranslateChunk(final.text, isFinal = true))
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             throw TranslationException("端侧大模型翻译失败：${t.message ?: t.javaClass.simpleName}", t)
         }
-
-        val final = LlamaOutput.clean(raw.toString())
-        if (final.truncated) {
-            android.util.Log.i(
-                TAG,
-                "输出已净化（${final.reason}）：raw=${raw.length} 字符 → ${final.text.length} 字符",
-            )
-        }
-        send(TranslateChunk(final.text, isFinal = true))
     }.buffer(Channel.CONFLATED)
 
     /**

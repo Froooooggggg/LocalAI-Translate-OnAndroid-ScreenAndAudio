@@ -886,6 +886,9 @@ class InterpretActivity : ComponentActivity() {
                     val path = intent?.getStringExtra("pcm") ?: "/data/local/tmp/asr_test.pcm"
                     feedPcmFile(path, ::append)
                 }
+                // 端侧大模型直测：不走 ASR / 采集，只验证「系统提示词 + 模型」本身。
+                // 用途：日语提示词回归（真机 HTP0 与 PC CPU 的输出可能不同）。
+                "llamatest" -> runLlamaTextTest()
                 "nettest" -> testNetApi()
                 // `--es auto ocrfile:/sdcard/x.png`：不碰界面，直接对一张图跑 OCR 并把结果打进日志。
                 // 真机上浮窗/防误触会吃掉触摸，有这种无头口子才能无人值守回归竖排与横排。
@@ -952,6 +955,66 @@ class InterpretActivity : ComponentActivity() {
     }
 
     // ---------------------------------------------------------------- 注入式自测
+
+    /**
+     * 日文提示词的真机直测：**不走 ASR、不走采集**，直接对 [TranslationProvider] 发几句日文。
+     *
+     * 用法：
+     * ```
+     * adb shell am start -n com.screenast.app.debug/com.screenast.app.InterpretActivity \
+     *   --es auto llamatest --es provider llama --es device HTP0
+     * ```
+     * 日志 `llamatest[n] OK_ZH/FAIL_JA ...` 可直接 grep；HTP0 的输出可能与 PC CPU 不同，
+     * 所以这条不能只靠 PC 侧结论。
+     */
+    private suspend fun runLlamaTextTest() {
+        val st = effectiveSettings()
+        append("llamatest：provider=${st.providerId} device=${st.llamaDevice} target=${st.targetLang.code}")
+        val factory = InterpretSession.translatorFactory(st)
+        if (factory == null) {
+            append("❌ llamatest：没有可用的翻译后端（检查 provider / 模型文件）")
+            return
+        }
+        val p = withContext(Dispatchers.Default) {
+            try {
+                factory()
+            } catch (t: Throwable) {
+                append("❌ llamatest：加载失败 ${t.javaClass.simpleName}: ${t.message}")
+                null
+            }
+        } ?: return
+        val cases = listOf(
+            "先生、こんにちは。アルナチャンネルの時間です。お元気にしていましたか。",
+            "ありがとうございます！とても嬉しいです。",
+            "申し訳ありませんが、その件については私では判断できません。",
+            "今日はいい天気ですね。",
+            "明日の会議は午後三時からです。",
+            "おい、そこの君。ちょっと来てくれないか。",
+        )
+        cases.forEachIndexed { i, src ->
+            val sb = StringBuilder()
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            runCatching {
+                p.translate(TranslateRequest(src, Lang.JA, Lang.ZH))
+                    .collect { c -> sb.setLength(0); sb.append(c.text) }
+            }.onSuccess {
+                val out = sb.toString().trim()
+                val kana = out.any {
+                    it.code in 0x3040..0x30FF || it.code in 0x31F0..0x31FF ||
+                        it.code in 0xFF61..0xFF9F
+                }
+                val tag = if (kana) "FAIL_JA" else "OK_ZH"
+                val ms = android.os.SystemClock.elapsedRealtime() - t0
+                android.util.Log.i(TAG, "llamatest[$i] $tag ${ms}ms src=$src out=$out")
+                append("llamatest[$i] ${if (kana) "❌仍是日文" else "✅中文"} ${ms}ms：$out")
+            }.onFailure {
+                android.util.Log.e(TAG, "llamatest[$i] ERROR", it)
+                append("llamatest[$i] ❌ ${it.javaClass.simpleName}: ${it.message}")
+            }
+        }
+        runCatching { p.close() }
+        append("llamatest 结束")
+    }
 
     /**
      * 把一个裸 PCM 文件（16 kHz / mono / s16le）灌进 `DictationHub`，走**完整**链路：

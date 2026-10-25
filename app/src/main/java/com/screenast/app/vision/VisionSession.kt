@@ -15,6 +15,7 @@ import com.screenast.app.core.Lang
 import com.screenast.app.translate.TranslateChunk
 import com.screenast.app.translate.TranslateRequest
 import com.screenast.app.translate.TranslationProvider
+import com.screenast.app.translate.TranslationQuality
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -198,7 +199,16 @@ object VisionSession {
                 val shortDropped = noChinese.size - kept.size
                 lastOcrMs = ocrMs
                 lastBlockCount = blocks.size
-                if (zhDropped > 0) Log.i(TAG, "跳过中文块 $zhDropped 个（共 ${rawKept.size} 个候选）")
+                if (zhDropped > 0) {
+                    // 带上原文样本：纯汉字日文（`東京駅`、`第3話 海辺の約束`）没有假名，
+                    // 会命中 75% 规则被当成中文丢掉。用户在日志里看到具体是哪几块，
+                    // 才能区分「Qwen 没翻」和「根本没送去翻」。
+                    val samples = rawKept
+                        .filter { VisionInpaint.isChinese(it.text) }
+                        .take(3)
+                        .joinToString(" | ") { it.text.take(16) }
+                    Log.i(TAG, "跳过中文块 $zhDropped 个（共 ${rawKept.size} 个候选）：$samples")
+                }
                 if (shortDropped > 0) Log.i(TAG, "跳过过短块 $shortDropped 个（< $minChars 字符）")
 
                 // 同一区域的多行先拼成一段：漫画一页 30~40 个框，逐框翻译既慢又断句。
@@ -484,29 +494,26 @@ object VisionSession {
             var out = ""
             try {
                 out = runTranslate(t, src, from, st.visionTargetLang, nudge = false)
-                // 模型偶尔直接吐回原文（尤其短句、专有名词、整句都是符号时）。
-                // 这种「译文」贴上去等于没翻，还会把擦掉的原字原样写回。
+                // 模型偶尔直接吐回原文（尤其短句、专有名词、整句都是符号时），
+                // 或者用原文语言改写（日文进、日文出）。这种「译文」贴上去等于没翻，
+                // 还会把擦掉的原字原样写回；更糟的是它会被 cache 缓存，下一帧继续用。
                 // 擦除档的块尤其不能省：原文已经被抹掉了，宁可多试一次
                 // （第二次把原文包进「」，破坏复读的连续性），实在不行才跳过，
                 // 跳过的那块保留原文可见，等于「不贴」而不是「贴回原文」。
-                if (isEcho(src, out)) {
-                    Log.w(TAG, "译文=原文，换写法重译一次：${src.take(30)}")
-                    val retry = runTranslate(t, src, from, st.visionTargetLang, nudge = true)
-                    out = retry
-                    if (isEcho(src, out) || out.isBlank()) {
-                        Log.w(TAG, "重译仍无有效译文，跳过该块：${src.take(30)}")
-                        echoSkipped++
-                        continue
-                    }
-                } else if (out.isBlank()) {
-                    // 空译文（后端抽风 / 截断）也重试一次，再空才跳过。
-                    Log.w(TAG, "译文为空，重试一次：${src.take(30)}")
-                    out = runTranslate(
+                if (TranslationQuality.looksUntranslated(from, st.visionTargetLang, src, out)) {
+                    Log.w(
+                        TAG,
+                        (if (out.isBlank()) "译文为空，重试一次：" else "译文仍像原文，换写法重译一次：") +
+                            src.take(30),
+                    )
+                    val retry = runTranslate(
                         t, src, from, st.visionTargetLang, nudge = true,
                         targetLabel = st.customTargetLang.trim(),
                         sourceLabel = st.customSourceLang.trim(),
                     )
-                    if (out.isBlank() || isEcho(src, out)) {
+                    out = retry
+                    if (TranslationQuality.looksUntranslated(from, st.visionTargetLang, src, out)) {
+                        Log.w(TAG, "重译仍无有效译文，跳过该块：${src.take(30)}")
                         echoSkipped++
                         continue
                     }
@@ -554,21 +561,6 @@ object VisionSession {
         )
             .collect { c: TranslateChunk -> out = c.text }
         return out.trim().removePrefix("「").removeSuffix("」").trim()
-    }
-
-    /**
-     * 译文是不是就是把原文抄了一遍。
-     *
-     * 比较前去掉空白和标点、统一大小写：模型常常只改了空格或标点，
-     * 那也算复读（贴上去用户看到的是同一句话）。
-     */
-    private fun isEcho(src: String, out: String): Boolean {
-        if (out.isBlank()) return false
-        fun norm(s: String): String = s.filter { it.isLetterOrDigit() }.lowercase()
-        val a = norm(src)
-        val b = norm(out)
-        if (a.isEmpty() || b.isEmpty()) return false
-        return a == b
     }
 
     private fun provider(ctx: Context, st: Settings): TranslationProvider? {

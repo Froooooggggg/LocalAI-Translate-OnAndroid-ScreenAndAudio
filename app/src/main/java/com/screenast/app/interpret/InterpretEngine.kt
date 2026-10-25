@@ -12,6 +12,7 @@ import com.screenast.app.translate.HistoryTurn
 import com.screenast.app.translate.TranslateChunk
 import com.screenast.app.translate.TranslateRequest
 import com.screenast.app.translate.TranslationProvider
+import com.screenast.app.translate.TranslationQuality
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
@@ -543,7 +544,21 @@ class InterpretEngine(
                     translated++
                     // 只有定稿才进上文：中途的 chunk 是半句，写进去会让下一句条件在
                     // 一个不完整的助手上，输出质量反而下降（§0.5 的教训）。
-                    rememberTurn(job, chunk.text)
+                    //
+                    // ⚠️ 但「定稿」不等于「真的翻了」：2B 在日语上偶尔会回一段日文改写
+                    // （`お元気にしていましたか` → `元気にお過ごしでしょうか`），
+                    // 精确相等比较抓不到。让它进 history 后，下一句会条件在日文 assistant
+                    // 轮上，本来能翻的句子也会被带成日文。所以这里必须过语言校验。
+                    if (TranslationQuality.looksUntranslated(job.source, job.target, job.text, chunk.text)) {
+                        Log.w(
+                            TAG,
+                            "第 ${job.id} 句译文仍像原文（未翻成${job.target.label}），不写入上文：" +
+                                "${chunk.text.take(40)}",
+                        )
+                        callback.onNotice("第 ${job.id} 句模型没翻成${job.target.label}，这句不写入上文")
+                    } else {
+                        rememberTurn(job, chunk.text)
+                    }
                 }
                 // firstMs 每个 chunk 都传（见 Callback.onTranslation 的说明）。
                 callback.onTranslation(job.id, chunk.text, chunk.isFinal, firstMs, total)

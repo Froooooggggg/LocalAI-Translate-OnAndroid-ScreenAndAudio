@@ -37,7 +37,7 @@ object Notice {
     val sections: List<Section> = listOf(
         Section(
             "一、软件状态与使用风险",
-            "本软件处于测试阶段（0.7.3 Beta），功能与稳定性都不作保证，可能随时修改或停止维护。" +
+            "本软件处于测试阶段（0.7.4 Beta），功能与稳定性都不作保证，可能随时修改或停止维护。" +
                 "使用过程中可能出现手机卡顿、发热、耗电加快、应用闪退、系统重启、识别或翻译结果错误、" +
                 "以及因模型文件损坏或空间不足导致的数据丢失等问题。\n" +
                 "以上风险由使用者自行承担；开发者不提供任何形式的明示或默示担保（包括但不限于适销性、" +
@@ -115,7 +115,7 @@ fun NoticeDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text(
-                    "同传互译 0.7.3 Beta · 公告版本 ${Notice.VERSION}",
+                    "同传互译 0.7.4 Beta · 公告版本 ${Notice.VERSION}",
                     fontSize = 11.sp,
                     color = Color(0xFF9E9EA7),
                 )
